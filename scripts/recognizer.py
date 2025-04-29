@@ -13,7 +13,7 @@ import numpy as np
 import sqlite3
 import os
 import datetime
-
+import re
 # -----------------------------------
 # Configuration Settings (easy to adjust for future changes)♾
 # -----------------------------------
@@ -99,6 +99,8 @@ while True:
     face_locations = face_recognition.face_locations(rgb_frame)
     face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
 
+    unknown_face_index = None  # <--- ADD THIS LINE
+
     for face_encoding, (top, right, bottom, left) in zip(face_encodings, face_locations):
         matches = face_recognition.compare_faces(known_faces, face_encoding, tolerance=TOLERANCE)
         name = "Unknown"
@@ -119,44 +121,55 @@ while True:
     key = cv2.waitKey(1) & 0xFF
 
     if key == ord("n"):
-        unknown_face_index = [i for i, match in enumerate(matches) if not match]
-    if unknown_face_index:
-        unknown_face_index = unknown_face_index[0]
-        unknown_encoding = face_encodings[unknown_face_index]
+        unknown_face_indices = [i for i, match in enumerate(matches) if not match]
+        if unknown_face_indices:  # <-- Check if there is at least one unknown face
+            unknown_face_index = unknown_face_indices[0]
+            unknown_encoding = face_encodings[unknown_face_index]
 
-        while True:
-            user_name = input("Enter your name: ").strip()
+            while True:
+                user_name = input("Enter your name (letters only, max 20 characters): ").strip()
 
-            if not user_name:
-                print("❌ Name cannot be empty. Please try again.")
-                continue
 
-            # Check if the name already exists in the database
-            cursor.execute("SELECT COUNT(*) FROM faces WHERE name = ?", (user_name,))
-            if cursor.fetchone()[0] > 0:
-                print(f"❌ The name '{user_name}' already exists. Please choose a different name.")
-                continue
+                if not user_name:
+                    print("❌ Name cannot be empty. Please try again.")
+                    continue
 
-            # Remove forbidden characters
-            user_name = "".join(c for c in user_name if c.isalnum() or c in (" ", "_", "-")).rstrip()
+                if len(user_name) > 20:
+                    print("❌ Name is too long. Please limit to 20 characters.")
+                    continue
+                
+                if not re.fullmatch(r"[a-zA-Z0-9 _-]+", user_name):
+                    print("❌ Name can only contain letters, numbers, spaces, underscores, and hyphens.")
+                    continue
 
-            break  # Valid name!
+                user_name = user_name.title()  # Capitalize first letter of each word
 
-        if not os.path.exists(NEW_FACE_SAVE_DIR):
-            os.makedirs(NEW_FACE_SAVE_DIR)
-        img_path = os.path.join(NEW_FACE_SAVE_DIR, f"{user_name}.jpg")
-        cv2.imwrite(img_path, frame)
 
-        encoding_bytes = np.array(unknown_encoding).tobytes()
-        cursor.execute("INSERT INTO faces (name, encoding) VALUES (?, ?)", (user_name, encoding_bytes))
-        conn.commit()
-        print(f"✅ {user_name} added to database!")
+                # Check if the name already exists in the database
+                cursor.execute("SELECT COUNT(*) FROM faces WHERE name = ?", (user_name,))
+                if cursor.fetchone()[0] > 0:
+                    print(f"❌ The name '{user_name}' already exists. Please choose a different name.")
+                    continue
 
-        known_faces, known_names = load_known_faces()
+                # Remove forbidden characters
+                user_name = "".join(c for c in user_name if c.isalnum() or c in (" ", "_", "-")).rstrip()
+                break  # Valid name!
 
+            if not os.path.exists(NEW_FACE_SAVE_DIR):
+                os.makedirs(NEW_FACE_SAVE_DIR)
+            img_path = os.path.join(NEW_FACE_SAVE_DIR, f"{user_name}.jpg")
+            cv2.imwrite(img_path, frame)
+
+            encoding_bytes = np.array(unknown_encoding).tobytes()
+            cursor.execute("INSERT INTO faces (name, encoding) VALUES (?, ?)", (user_name, encoding_bytes))
+            conn.commit()
+            print(f"✅ {user_name} added to database!")
+
+            known_faces, known_names = load_known_faces()
 
     if key == ord("q"):
         break
+
 
 # Cleanup
 video_capture.release()
