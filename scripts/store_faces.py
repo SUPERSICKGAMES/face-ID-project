@@ -10,11 +10,10 @@ import sqlite3
 import numpy as np
 import face_recognition
 import os
-
-
+from config import DATABASE_PATH, FACES_DIR
 
 # Connect to the database
-conn = sqlite3.connect("faces.db")
+conn = sqlite3.connect(DATABASE_PATH)
 cursor = conn.cursor()
 
 def encode_face(image_path, name):
@@ -51,10 +50,10 @@ def encode_faces_from_folder(folder_path, name):
             encode_face(image_path, name)
 
 # Example Usage: Encode multiple users
-encode_faces_from_folder("scripts/faces/veeran", "Veeran Reddy")
-encode_faces_from_folder("scripts/faces/james", "James Moyes")
-encode_faces_from_folder("scripts/faces/noah", "Noah Johnson")
-encode_faces_from_folder("scripts/faces/hugh", "Hugh Webber")
+encode_faces_from_folder(os.path.join(FACES_DIR, "veeran"), "Veeran Reddy")
+encode_faces_from_folder(os.path.join(FACES_DIR, "james"), "James Moyes")
+encode_faces_from_folder(os.path.join(FACES_DIR, "noah"), "Noah Johnson")
+encode_faces_from_folder(os.path.join(FACES_DIR, "hugh"), "Hugh Webber")
 
 # Close the database connection
 conn.close()

@@ -14,17 +14,19 @@ import sqlite3
 import os
 import datetime
 import re
+from config import *
+
 # -----------------------------------
 # Configuration Settings (easy to adjust for future changes)♾
 # -----------------------------------
-DATABASE_PATH = "faces.db"
-LOG_FILE_PATH = "logs.txt"
-CAMERA_INDEX = 1  # 1 = default webcam, 0, 2 = external webcam
-FRAME_WIDTH = 640
-FRAME_HEIGHT = 480
-TOLERANCE = 0.5  # Face recognition strictness
-NEW_FACE_SAVE_DIR = "scripts/faces/"
-FACE_BUFFER_SECONDS = 300  # Buffer to prevent duplicate logging (5 minutes)
+# DATABASE_PATH = "faces.db"
+# LOG_FILE_PATH = "logs.txt"
+# CAMERA_INDEX = 0  # 1 = default webcam, 0, 2 = external webcam
+# FRAME_WIDTH = 640
+# FRAME_HEIGHT = 480
+# TOLERANCE = 0.5  # Face recognition strictness
+# NEW_FACE_SAVE_DIR = "scripts/faces/"
+# FACE_BUFFER_SECONDS = 300  # Buffer to prevent duplicate logging (5 minutes)
 
 # -----------------------------------
 # Connect to the database
@@ -80,98 +82,125 @@ def log_recognition(name):
 
     print(f"Logged {name} at {timestamp}")
 
-# -----------------------------------
-# Main Program
-# -----------------------------------
-known_faces, known_names = load_known_faces()
+class FaceRecognizer:
+    def __init__(self):
+        self.conn = sqlite3.connect(DATABASE_PATH)
+        self.cursor = self.conn.cursor()
+        self.known_faces, self.known_names = self.load_known_faces()
+        self.video_capture = None
+        
+    def load_known_faces(self):
+        """Load known face encodings and names from the database."""
+        self.cursor.execute("SELECT name, encoding FROM faces")
+        known_faces = []
+        known_names = []
+        for row in self.cursor.fetchall():
+            name, encoding_bytes = row
+            encoding = np.frombuffer(encoding_bytes, dtype=np.float64)
+            known_faces.append(encoding)
+            known_names.append(name)
+        return known_faces, known_names
+    
+    def start(self):
+        self.video_capture = cv2.VideoCapture(CAMERA_INDEX)
+        self.video_capture.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
+        self.video_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
+        
+    def process_frame(self):
+        ret, frame = self.video_capture.read()
+        if not ret:
+            return None
 
-video_capture = cv2.VideoCapture(CAMERA_INDEX)
-video_capture.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
-video_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        face_locations = face_recognition.face_locations(rgb_frame)
+        face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
 
-while True:
-    ret, frame = video_capture.read()
-    if not ret:
-        print("Failed to grab frame")
-        break
+        unknown_face_index = None  # <--- ADD THIS LINE
 
-    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    face_locations = face_recognition.face_locations(rgb_frame)
-    face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
+        for face_encoding, (top, right, bottom, left) in zip(face_encodings, face_locations):
+            matches = face_recognition.compare_faces(self.known_faces, face_encoding, tolerance=TOLERANCE)
+            name = "Unknown"
 
-    unknown_face_index = None  # <--- ADD THIS LINE
+            if True in matches:
+                matched_index = matches.index(True)
+                name = self.known_names[matched_index]
+                log_recognition(name)
+            else:
+                cv2.putText(frame, "New face detected! Press 'n' to register", (left, top - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
 
-    for face_encoding, (top, right, bottom, left) in zip(face_encodings, face_locations):
-        matches = face_recognition.compare_faces(known_faces, face_encoding, tolerance=TOLERANCE)
-        name = "Unknown"
+            cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
+            cv2.putText(frame, name, (left, bottom + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
 
-        if True in matches:
-            matched_index = matches.index(True)
-            name = known_names[matched_index]
-            log_recognition(name)
-        else:
-            cv2.putText(frame, "New face detected! Press 'n' to register", (left, top - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+        return frame
+        
+    def stop(self):
+        if self.video_capture:
+            self.video_capture.release()
+        cv2.destroyAllWindows()
+        self.conn.close()
 
-        cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
-        cv2.putText(frame, name, (left, bottom + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+# Make the script runnable both standalone and as a module
+if __name__ == "__main__":
+    recognizer = FaceRecognizer()
+    recognizer.start()
 
-    cv2.imshow("Face Recognition System", frame)
+    while True:
+        frame = recognizer.process_frame()
+        if frame is None:
+            print("Failed to grab frame")
+            break
 
-    key = cv2.waitKey(1) & 0xFF
+        cv2.imshow("Face Recognition System", frame)
 
-    if key == ord("n"):
-        unknown_face_indices = [i for i, match in enumerate(matches) if not match]
-        if unknown_face_indices:  # <-- Check if there is at least one unknown face
-            unknown_face_index = unknown_face_indices[0]
-            unknown_encoding = face_encodings[unknown_face_index]
+        key = cv2.waitKey(1) & 0xFF
 
-            while True:
-                user_name = input("Enter your name (letters only, max 20 characters): ").strip()
+        if key == ord("n"):
+            unknown_face_indices = [i for i, match in enumerate(matches) if not match]
+            if unknown_face_indices:  # <-- Check if there is at least one unknown face
+                unknown_face_index = unknown_face_indices[0]
+                unknown_encoding = face_encodings[unknown_face_index]
 
+                while True:
+                    user_name = input("Enter your name (letters only, max 20 characters): ").strip()
 
-                if not user_name:
-                    print("❌ Name cannot be empty. Please try again.")
-                    continue
+                    if not user_name:
+                        print("❌ Name cannot be empty. Please try again.")
+                        continue
 
-                if len(user_name) > 20:
-                    print("❌ Name is too long. Please limit to 20 characters.")
-                    continue
-                
-                if not re.fullmatch(r"[a-zA-Z0-9 _-]+", user_name):
-                    print("❌ Name can only contain letters, numbers, spaces, underscores, and hyphens.")
-                    continue
+                    if len(user_name) > 20:
+                        print("❌ Name is too long. Please limit to 20 characters.")
+                        continue
+                    
+                    if not re.fullmatch(r"[a-zA-Z0-9 _-]+", user_name):
+                        print("❌ Name can only contain letters, numbers, spaces, underscores, and hyphens.")
+                        continue
 
-                user_name = user_name.title()  # Capitalize first letter of each word
+                    user_name = user_name.title()  # Capitalize first letter of each word
 
+                    # Check if the name already exists in the database
+                    recognizer.cursor.execute("SELECT COUNT(*) FROM faces WHERE name = ?", (user_name,))
+                    if recognizer.cursor.fetchone()[0] > 0:
+                        print(f"❌ The name '{user_name}' already exists. Please choose a different name.")
+                        continue
 
-                # Check if the name already exists in the database
-                cursor.execute("SELECT COUNT(*) FROM faces WHERE name = ?", (user_name,))
-                if cursor.fetchone()[0] > 0:
-                    print(f"❌ The name '{user_name}' already exists. Please choose a different name.")
-                    continue
+                    # Remove forbidden characters
+                    user_name = "".join(c for c in user_name if c.isalnum() or c in (" ", "_", "-")).rstrip()
+                    break  # Valid name!
 
-                # Remove forbidden characters
-                user_name = "".join(c for c in user_name if c.isalnum() or c in (" ", "_", "-")).rstrip()
-                break  # Valid name!
+                if not os.path.exists(NEW_FACE_SAVE_DIR):
+                    os.makedirs(NEW_FACE_SAVE_DIR)
+                img_path = os.path.join(NEW_FACE_SAVE_DIR, f"{user_name}.jpg")
+                cv2.imwrite(img_path, frame)
 
-            if not os.path.exists(NEW_FACE_SAVE_DIR):
-                os.makedirs(NEW_FACE_SAVE_DIR)
-            img_path = os.path.join(NEW_FACE_SAVE_DIR, f"{user_name}.jpg")
-            cv2.imwrite(img_path, frame)
+                encoding_bytes = np.array(unknown_encoding).tobytes()
+                recognizer.cursor.execute("INSERT INTO faces (name, encoding) VALUES (?, ?)", (user_name, encoding_bytes))
+                recognizer.conn.commit()
+                print(f"✅ {user_name} added to database!")
 
-            encoding_bytes = np.array(unknown_encoding).tobytes()
-            cursor.execute("INSERT INTO faces (name, encoding) VALUES (?, ?)", (user_name, encoding_bytes))
-            conn.commit()
-            print(f"✅ {user_name} added to database!")
+                recognizer.known_faces, recognizer.known_names = recognizer.load_known_faces()
 
-            known_faces, known_names = load_known_faces()
+        if key == ord("q"):
+            break
 
-    if key == ord("q"):
-        break
-
-
-# Cleanup
-video_capture.release()
-cv2.destroyAllWindows()
-conn.close()
+    recognizer.stop()
